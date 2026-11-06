@@ -42,6 +42,9 @@ CONNECTION_POLL_INTERVAL = 5
 # aiohttp websocket heartbeat; detects dead connections (Moonraker restart).
 WEBSOCKET_HEARTBEAT = 30
 
+# Log one retry line every N failed attempts (30 min at the 60 s cap).
+RETRY_LOG_EVERY = 30
+
 
 # pylint: disable=R0902,R0903
 class Spool2Klipper:
@@ -174,12 +177,14 @@ class Spool2Klipper:
     async def _routine(self):
         """Keep a live connection, retrying while Klipper is not available."""
         retry_delay = RETRY_MIN_DELAY
+        failures = 0
 
         async with aiohttp.ClientSession() as self.http_session:
             while True:
                 try:
                     await self._connect()
                     retry_delay = RETRY_MIN_DELAY
+                    failures = 0
 
                     while self.moonraker_server.connected:
                         await asyncio.sleep(CONNECTION_POLL_INTERVAL)
@@ -187,11 +192,15 @@ class Spool2Klipper:
                     logging.info("Connection to Moonraker lost, reconnecting")
 
                 except Exception as exc:  # pylint: disable=broad-except
-                    logging.info(
-                        "Klipper/Moonraker not available (%s); retrying in %d s",
-                        exc,
-                        retry_delay,
-                    )
+                    # Log the first failure and then one line every 30 attempts
+                    # (about 30 minutes at the 60 s cap) to keep the journal quiet.
+                    if failures % RETRY_LOG_EVERY == 0:
+                        logging.info(
+                            "Klipper/Moonraker not available (%s); retrying in %d s",
+                            exc,
+                            retry_delay,
+                        )
+                    failures += 1
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, RETRY_MAX_DELAY)
 
